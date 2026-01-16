@@ -9,3 +9,13 @@ input/*
 !input/readme.txt
 outputs/
 src/detection/config_test.py
+
+*.geojson
+
+*.ckpt
+*.tfevents*
+*.png
+*.csv
+*.json
+*.yaml
+*.pth
