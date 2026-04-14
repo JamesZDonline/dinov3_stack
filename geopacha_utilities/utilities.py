@@ -37,3 +37,32 @@ def find_pixel_size(imagery_path: str) -> float:
         
         # transform[0] is the pixel width in meters
         return abs(transform[0])
+    
+
+from tqdm import tqdm
+import pandas as pd
+import geopandas as gpd
+import os
+def validate_geopacha_class_config(LABEL_DIRECTORY,train_cfg):
+    print("Read labels and validate class config")
+    label_dataframes=[]
+    for label_file in tqdm(os.listdir(LABEL_DIRECTORY)):
+        label_dataframes.append(gpd.read_file(os.path.join(LABEL_DIRECTORY,label_file)))
+    labels = pd.concat(label_dataframes)
+
+    # Get unique pairs and sort by class_id to ensure order
+    mapping_df = labels[['class_id', 'class_name']].drop_duplicates().sort_values('class_id')
+    label_names_list = mapping_df['class_name'].tolist()
+    label_names_list.append("background")
+    ids_list = mapping_df['class_id'].tolist()
+
+
+    names_list = train_cfg["data_config"]["class_config"]["class_names"]
+    if label_names_list != names_list:
+        raise RuntimeError("Check config, the names/class_ids in the labels don't match those in the config")
+    colors_list = train_cfg["data_config"]["class_config"]["class_colors"]
+    if len(colors_list)!=len(names_list):
+        raise Warning("Color and class_name lists aren't 1 to 1: generating random colors")
+        all_color_names = [c for c in mcolors.CSS4_COLORS.keys() if 'white' not in c and 'snow' not in c]
+        colors_list = random.sample(all_color_names, len(names_list))
+    return names_list, colors_list
