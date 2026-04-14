@@ -44,6 +44,23 @@ class SimpleDecoder(nn.Module):
     def forward(self, x):
         return self.decode(x)
 
+class UpsampleDecoder(nn.Module):
+    def __init__(self, in_channels, nc):
+        super().__init__()
+        self.decode = nn.Sequential(
+            nn.Conv2d(in_channels, 256, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Upsample(scale_factor=4, mode='bilinear', align_corners=False),
+            nn.Conv2d(256, 128, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Upsample(scale_factor=4, mode='bilinear', align_corners=False),
+            nn.Conv2d(128, nc, 1),
+        )  # 64 -> 256 -> 1024
+    
+
+    def forward(self, x):
+        return self.decode(x)
+
 class Dinov3Segmentation(nn.Module):
     def __init__(
         self, 
@@ -73,7 +90,7 @@ class Dinov3Segmentation(nn.Module):
         self.feature_extractor_layers = 1 if feature_extractor == 'last' else model_feature_layers[self.model_name]
         decode_head_in_channels = self.backbone_model.norm.normalized_shape[0] if feature_extractor == 'last' else self.backbone_model.norm.normalized_shape[0] * 4
 
-        self.decode_head = SimpleDecoder(
+        self.decode_head = UpsampleDecoder(
             in_channels=decode_head_in_channels, 
             nc=self.num_classes
         )
