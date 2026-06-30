@@ -11,13 +11,13 @@ outputs/
 src/detection/config_test.py
 
 *.geojson
-
+hparams.yaml
 *.ckpt
 *.tfevents*
 *.png
 *.csv
 *.json
-*.yaml
 *.pth
 *.gpkg
 *.pt
+
