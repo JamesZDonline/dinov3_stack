@@ -1,0 +1,71 @@
+model_name: 'geopacha_object_detection'
+experiment_name: 'dinov3_vitl16_upsample_peft'
+
+hardware_config: 
+    gpu_id: '0'
+
+imagery_data: '/mnt/sarl_commons06/Wernke_projects/GeoPACHA/Imagery_Machine_Learning/Analysis_Images'
+#Vector data must be in geojson format.
+vector_data:
+  #Each AOI should correspond to a single image and have attributes:
+  #imageid (with the image id) and 
+  #filepath (with the path to the image starting from the image_data directory)
+  aois:
+    training_aoi_dir: '/home/VANDERBILT/zimmejr1/Documents/GitHub/geopacha_object_detection/OD3/AOI_Training'
+    validation_aoi_dir: '/home/VANDERBILT/zimmejr1/Documents/GitHub/geopacha_object_detection/OD3/AOI_Validation'
+  label_dir: '/home/VANDERBILT/zimmejr1/Documents/GitHub/geopacha_object_detection/OD3/Labels'
+
+data_config:
+  chip_config:
+    patch_dim: 1024
+    upsample_factor: 2
+    channel_order:
+      - 4
+      - 2
+      - 1
+  class_config:
+    class_names:
+      - 'Corral-Arch'
+      - 'Struct-Unroofed-Arch'
+      - 'Corral-Mod'
+      - 'background'
+    class_colors:
+      - blue
+      - green
+      - red
+      - black
+    null_class: 'background'
+  data_loader_config:
+    batch_size: 8
+    num_workers: 16
+
+model_config:
+  model_setup:
+    repo_path: "/home/VANDERBILT/zimmejr1/Documents/GitHub/dinov3"
+    weights_path: '/home/VANDERBILT/zimmejr1/Documents/DinoV3_weights/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth'
+    model_backbone_name: 'dinov3_vitl16'
+    fine_tune: True
+    use_lora: True
+    lora_config:
+      r: 8
+      lora_alpha: 16
+      lora_dropout: 0.1
+      target_modules:
+        - 'qkv'
+        - 'proj'
+    lightning_checkpoint_path: #"/home/VANDERBILT/zimmejr1/Documents/GitHub/dinov3_stack/checkpoints/luna_upsample_plateau/arch-dinov3-epoch=31-mAP50=0.285.ckpt"
+
+
+  hyperparameters:
+    learning_rate: 1.0e-4
+    early_stop_patience: 20
+    label_config:
+      smoothing: 0.01
+      gamma: 2
+  
+
+output_config:
+  log_dir: "logs"
+  checkpoint_dir: "checkpoints"
+  
+

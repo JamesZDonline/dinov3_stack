@@ -1,0 +1,53 @@
+model_name: 'geopacha_object_detection'
+experiment_name: 'testing_code'
+
+hardware_config: 
+    gpu_id: '0'
+
+imagery_data: '/mnt/sarl_commons06/Wernke_projects/GeoPACHA/Imagery_Machine_Learning/Analysis_Images'
+#Vector data must be in geojson format.
+vector_data:
+  #Each AOI should correspond to a single image and have attributes:
+  #imageid (with the image id) and 
+  #filepath (with the path to the image starting from the image_data directory)
+  inference_aoi_dir: "/home/VANDERBILT/zimmejr1/Documents/GitHub/dinov3-james-experiments/OD_data/Buffered_Chacu_AOI/ExpandedSecondPass"
+  label_dir: '/mnt/sarl_commons06/Wernke_projects/zimmejr1/DinoV3_Chacu_AOI_12_23_25/labels'
+
+
+# IMAGERY_BASE_DIRECTORY = '/mnt/sarl_commons06/Wernke_projects/GeoPACHA/Imagery_Machine_Learning/Analysis_Images'
+
+data_config:
+  chip_config:
+    patch_dim: 1024 
+    upsample_factor: 1
+  class_config:
+    class_names:
+      - 'Chacu'
+      - 'background'
+    class_colors:
+      - red
+      - black
+    null_class: 'background'
+  data_loader_config:
+    batch_size: 16
+    num_workers: 0
+
+model_config:
+  model_setup:
+    repo_path: "/home/VANDERBILT/zimmejr1/Documents/GitHub/dinov3"
+    weights_path: '/home/VANDERBILT/zimmejr1/Documents/DinoV3_weights/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth'
+    model_backbone_name: 'dinov3_vitl16'
+    lightning_checkpoint_path: "/home/VANDERBILT/zimmejr1/Documents/GitHub/dinov3_stack/checkpoints/luna_upsample_plateau/arch-dinov3-epoch=31-mAP50=0.285.ckpt"
+  hyperparameters:
+    learning_rate: 5.0e-5
+    early_stop_patience: 20
+    label_config:
+      smoothing: 0.01
+      gamma: 2
+  
+
+output_config:
+  clip_to_aoi:
+  output_dir: 
+  output_label_suffix: 
+
