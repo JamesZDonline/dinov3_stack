@@ -1,0 +1,69 @@
+model_name: 'geopacha_object_detection'
+
+hardware_config: 
+    gpu_id: '1'
+
+imagery_data: '/mnt/sarl_commons06/Wernke_projects/GeoPACHA/Imagery_Machine_Learning/Analysis_Images'
+#Vector data must be in geojson format.
+vector_data:
+  # inference_aoi_dir: '/mnt/sarl_commons06/Wernke_projects/zimmejr1/scatter_deploy'
+  # inference_aoi_dir: '/home/VANDERBILT/zimmejr1/Documents/GitHub/geopacha_object_detection/OD_Data_Jun26_2026/AOI_Training'
+  inference_aoi_dir: '/mnt/sarl_commons06/Wernke_projects/zimmejr1/All_AOI_10_20_25/'
+
+
+  label_dir: '/home/VANDERBILT/zimmejr1/Documents/GitHub/geopacha_object_detection/OD3/Labels'
+
+data_config:
+  chip_config:
+    patch_dim: 896
+    upsample_factor: 2
+    stride_factor: 0.75
+    channel_order: [0,1,2,3,4,5,6,7]
+  class_config:
+    class_names:
+      - 'Corral-Arch'
+      - 'Struct-Unroofed-Arch'
+      - 'Corral-Mod'
+      - 'background'
+    class_colors:
+      - blue
+      - green
+      - red
+      - black
+    null_class: 'background'
+  data_loader_config:
+    batch_size: 64
+    num_workers: 16
+
+model_config:
+  model_setup:
+    repo_path: "/home/VANDERBILT/zimmejr1/Documents/GitHub/dinov2"
+    weights_path: '/home/VANDERBILT/zimmejr1/GeoPACHA/7.pt'
+    model_backbone_name: 'dinov2_vitl14'
+    fine_tune: True
+    use_lora: True
+    input_channels: 8
+    clean_weights: False
+    lora_config:
+      r: 8
+      lora_alpha: 16
+      lora_dropout: 0.1
+      target_modules:
+        - 'qkv'
+        - 'proj'
+    # lightning_checkpoint_path: '/home/VANDERBILT/zimmejr1/Documents/GitHub/dinov3_stack/checkpoints/geopacha_object_detection/dinov2_vitl14_OD_Data_clean-epoch=08-mAP50=0.396.ckpt'
+    lightning_checkpoint_path: '/home/VANDERBILT/zimmejr1/Documents/GitHub/dinov3_stack/checkpoints/geopacha_object_detection/dinov2_vitl16_upsample_peft_Jun26_2026-epoch=13-mAP50=0.406.ckpt'
+  hyperparameters:
+    learning_rate: 1.0e-4
+    early_stop_patience: 20
+    label_config:
+      smoothing: 0.01
+      gamma: 2
+  
+
+output_config:
+  clip_to_aoi: False
+  output_dir: '/home/VANDERBILT/zimmejr1/Documents/GitHub/dinov3_stack/data/Outputs/dinov2_vitl14_Jun26_2026'
+  output_label_suffix: 'od_labels.geojson'
+  
+
