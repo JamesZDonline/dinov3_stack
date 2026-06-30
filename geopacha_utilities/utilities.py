@@ -1,6 +1,29 @@
+# Import rasterio and related modules for geospatial data processing
 import rasterio
 from rasterio.warp import calculate_default_transform
 from pyproj import CRS
+
+# Import utilities for progress tracking and data manipulation
+from tqdm import tqdm
+import pandas as pd
+import geopandas as gpd
+import os
+
+# Import Raster Vision specific modules
+from rastervision.pipeline.file_system import json_to_file, get_tmp_dir
+from rastervision.pytorch_learner.object_detection_utils import get_coco_preds, get_coco_gt
+
+import torch
+
+
+# Import COCO evaluation utilities
+import pycocotools
+from pycocotools.coco import COCO
+from lightning_utils.custom_coco import CustomCOCOeval
+
+import random
+import matplotlib.colors as mcolors
+
 
 def find_pixel_size(imagery_path: str) -> float:
     with rasterio.open(imagery_path) as src:
@@ -21,39 +44,76 @@ def find_pixel_size(imagery_path: str) -> float:
         return abs(transform[0])
     
 
-from tqdm import tqdm
-import pandas as pd
-import geopandas as gpd
-import os
-def validate_geopacha_class_config(LABEL_DIRECTORY,run_cfg):
+
+def validate_geopacha_class_config(LABEL_DIRECTORY, run_cfg):
+    """
+    Validates that the class configuration in the label data matches the one defined in the run configuration.
+
+    This function reads all GeoJSON files from a specified label directory, combines them into a single
+    GeoDataFrame, and then checks whether the unique class names and IDs match those provided in the
+    configuration. It also ensures that the number of colors specified matches the number of classes.
+
+    Parameters:
+    -----------
+    LABEL_DIRECTORY : str
+        Path to the directory containing label GeoJSON files.
+    run_cfg : dict
+        Configuration dictionary containing data_config -> class_config with class_names and class_colors.
+
+    Returns:
+    --------
+    tuple
+        A tuple containing two lists:
+        - names_list: List of class names in order of their IDs.
+        - colors_list: List of color codes corresponding to each class.
+
+    Raises:
+    -------
+    RuntimeError
+        If the class names or IDs in the labels do not match those in the configuration.
+    Warning
+        If the number of colors does not match the number of classes, a warning is issued and
+        random colors are generated.
+    """
+
+    # Read all label files into a list of GeoDataFrames
+    label_dataframes = []
     print("Read labels and validate class config")
-    label_dataframes=[]
     for label_file in tqdm(os.listdir(LABEL_DIRECTORY)):
-        label_dataframes.append(gpd.read_file(os.path.join(LABEL_DIRECTORY,label_file)))
+        label_dataframes.append(gpd.read_file(os.path.join(LABEL_DIRECTORY, label_file)))
+
+    # Concatenate all GeoDataFrames into one
     labels = pd.concat(label_dataframes)
 
-    # Get unique pairs and sort by class_id to ensure order
+    # Extract unique class_id and class_name pairs, sorted by class_id to maintain consistent order
     mapping_df = labels[['class_id', 'class_name']].drop_duplicates().sort_values('class_id')
+
+    # Convert to lists for easier comparison and appending background class
     label_names_list = mapping_df['class_name'].tolist()
-    label_names_list.append("background")
+    label_names_list.append("background")  # Add background as a special class
     ids_list = mapping_df['class_id'].tolist()
 
-
+    # Retrieve expected class names from the run configuration
     names_list = run_cfg["data_config"]["class_config"]["class_names"]
+
+    # Validate that labels match configuration
     if label_names_list != names_list:
-        raise RuntimeError("Check config, the names/class_ids in the labels don't match those in the config")
+        raise RuntimeError("Check config: the names/class_ids in the labels don't match those in the config")
+
+    # Retrieve expected colors from the run configuration
     colors_list = run_cfg["data_config"]["class_config"]["class_colors"]
-    if len(colors_list)!=len(names_list):
-        raise Warning("Color and class_name lists aren't 1 to 1: generating random colors")
+
+    # Validate that the number of colors matches the number of classes
+    if len(colors_list) != len(names_list):
+
+
+        # Issue warning and generate random colors if mismatch
+        print("Warning: Color and class_name lists aren't 1 to 1: generating random colors")
         all_color_names = [c for c in mcolors.CSS4_COLORS.keys() if 'white' not in c and 'snow' not in c]
         colors_list = random.sample(all_color_names, len(names_list))
+
     return names_list, colors_list
 
-from rastervision.pipeline.file_system import json_to_file, get_tmp_dir
-from rastervision.pytorch_learner.object_detection_utils import get_coco_preds, get_coco_gt
-import pycocotools
-from pycocotools.coco import COCO
-from lightning_utils.custom_coco import CustomCOCOeval
 
 def compute_coco_eval(outputs, targets, num_class_ids):
     """Return mAP averaged over 0.5-0.95 using pycocotools eval.
@@ -93,7 +153,6 @@ def compute_coco_eval(outputs, targets, num_class_ids):
         return coco_eval
 
 
-import torch
 def get_detection_predictions(dataloader, model, device='cuda'):
     model.eval()
     model.to(device)
