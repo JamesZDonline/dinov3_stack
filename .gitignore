@@ -19,3 +19,5 @@ src/detection/config_test.py
 *.json
 *.yaml
 *.pth
+*.gpkg
+*.pt
