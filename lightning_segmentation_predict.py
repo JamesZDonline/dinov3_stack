@@ -56,7 +56,7 @@ import albumentations as A
 #Custom Packages
 from src.img_seg.model import Dinov3Segmentation
 
-from geopacha_utilities.utilities import find_pixel_size
+from geopacha_utilities.utilities import find_pixel_size, get_segmentation_predictions
 
 
 #Constants
@@ -263,22 +263,7 @@ from rastervision.pytorch_learner import SemanticSegmentationRandomWindowGeoData
 #         for out in out_batch:
 #             yield out.cpu().numpy()
 
-def get_predictions(dataloader, size):
-    for x, _ in tqdm(dataloader):
-        x = x.to(device)
-        with torch.inference_mode():
-            out_batch = model(x)
-            out_batch = out_batch.softmax(dim=1)  # [B, num_classes, H, W]
-            if out_batch.shape[-1] != size or out_batch.shape[-2] != size:
-                out_batch = torch.nn.functional.interpolate(
-                    out_batch,
-                    size=(size, size),
-                    mode='bilinear',
-                    align_corners=False
-                )
-            out_batch = out_batch.argmax(dim=1)  # [B, H, W] after interpolation
-        for out in out_batch:
-            yield out.cpu().numpy()
+
 
 
 # 1. Generate predictions
@@ -359,7 +344,7 @@ for ds in deploy_dataset_list:
             shuffle=False,     # Never shuffle during inference
             num_workers=32,     # Parallel loading
         )
-        predictions = get_predictions(inference_dl,ds.size[0])
+        predictions = get_segmentation_predictions(dataloader=inference_dl,model=model,size=ds.size[0],device=device)
 
 
         pred_labels = SemanticSegmentationLabels.from_predictions(
