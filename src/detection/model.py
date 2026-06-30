@@ -31,7 +31,7 @@ def load_model(weights: str=None, model_name: str=None, repo_dir: str=None):
     
     return model
 
-class Dinov3Backbone(nn.Module):
+class DinoBackbone(nn.Module):
     def __init__(self, 
         weights: str=None,
         model_name: str=None,
@@ -42,7 +42,7 @@ class Dinov3Backbone(nn.Module):
         input_channels: int=3
 
     ):
-        super(Dinov3Backbone, self).__init__()
+        super(DinoBackbone, self).__init__()
 
         self.model_name = model_name
         self.use_lora = use_lora
@@ -109,7 +109,7 @@ class Dinov3Backbone(nn.Module):
 
         return out
 
-def dinov3_detection(
+def dino_detection(
     fine_tune: bool=False,
     use_lora: bool=False,
     lora_config: dict=None,
@@ -123,7 +123,7 @@ def dinov3_detection(
     feature_extractor: str='last', # OR 'multi'
     head: str='ssd' # Detection head type, ssd or retinanet
 ):
-    backbone = Dinov3Backbone(
+    backbone = DinoBackbone(
         weights=weights, 
         model_name=model_name, 
         repo_dir=repo_dir, 
@@ -212,13 +212,13 @@ if __name__ == '__main__':
         print(f"Building {head} models...\n\n")
         for model_name in model_names:
             print('Testing: ', model_name)
-            # model = Dinov3Detection(
+            # model = DinoDetection(
             #     repo_dir=DINOV3_REPO, 
             #     weights=os.path.join(DINOV3_WEIGHTS, model_names[model_name]),
             #     model_name=model_name,
             #     feature_extractor='last' # OR 'last'
             # )
-            model = dinov3_detection(
+            model = dino_detection(
                 repo_dir=DINOV3_REPO, 
                 weights=os.path.join(DINOV3_WEIGHTS, model_names[model_name]),
                 model_name=model_name,

@@ -6,7 +6,7 @@ from torch.optim import AdamW
 import lightning as L
 
 
-from src.detection.model import dinov3_detection
+from src.detection.model import dino_detection
 from rastervision.pytorch_learner.object_detection_utils import compute_coco_eval
 
 from torchvision.models.detection.image_list import ImageList
@@ -119,7 +119,7 @@ def get_calibrated_dino_model(
             clean_weights_path=weights_path
             weights_path=None
         print("Loading and adjusting model")
-        model = dinov3_detection(
+        model = dino_detection(
             fine_tune=fine_tune,
             use_lora=use_lora,
             weights=clean_weights_path,
@@ -142,7 +142,7 @@ def get_calibrated_dino_model(
 
             print(f"Load Results:\nMissing: {msg.missing_keys}\nUnexpected: {msg.unexpected_keys}")
     else:
-        model = dinov3_detection(
+        model = dino_detection(
             fine_tune=fine_tune,
             use_lora=use_lora,
             lora_config=lora_config,
