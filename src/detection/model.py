@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import os
+from peft import get_peft_model, LoraConfig, TaskType
 
 from torchvision.models.detection.ssd import (
     SSD, 
@@ -35,22 +36,67 @@ class Dinov3Backbone(nn.Module):
         weights: str=None,
         model_name: str=None,
         repo_dir: str=None,
-        fine_tune: bool=False
+        fine_tune: bool=False,
+        use_lora: bool=False,
+        lora_config: dict=None,
+        input_channels: int=3
+
     ):
         super(Dinov3Backbone, self).__init__()
 
         self.model_name = model_name
+        self.use_lora = use_lora
+        self.lora_config = {
+                    "r": 8,
+                    "lora_alpha": 16,
+                    "lora_dropout": 0.1,
+                    "target_modules": ["qkv", "proj"]
+                }
 
         self.backbone_model = load_model(
             weights=weights, model_name=model_name, repo_dir=repo_dir
         )
 
-        if fine_tune:
-            for name, param in self.backbone_model.named_parameters():
-                param.requires_grad = True
-        else:
-            for name, param in self.backbone_model.named_parameters():
+        if use_lora and not fine_tune:
+            print("Warning: use_lora=True but fine_tune=False. LoRA will be ignored.")
+        
+        if input_channels!=3:
+            old_proj = self.backbone_model.patch_embed.proj
+
+            new_proj = nn.Conv2d(
+                in_channels=input_channels,
+                out_channels=old_proj.out_channels,
+                kernel_size=old_proj.kernel_size,
+                stride=old_proj.stride,
+                padding=old_proj.padding
+                ).requires_grad_(False)
+
+            self.backbone_model.patch_embed.proj = new_proj
+
+
+        for name, param in self.backbone_model.named_parameters():
                 param.requires_grad = False
+        
+        if fine_tune:
+            if use_lora:
+                if lora_config is None:
+                    lora_config = {}
+                
+                # Set defaults
+                self.lora_config.update(lora_config)
+                peft_config = LoraConfig(
+                    r=self.lora_config["r"],
+                    lora_alpha=self.lora_config["lora_alpha"],
+                    lora_dropout=self.lora_config["lora_dropout"],
+                    bias="none",
+                    target_modules=self.lora_config["target_modules"],
+                    task_type=TaskType.FEATURE_EXTRACTION,
+                )
+                self.backbone_model = get_peft_model(self.backbone_model, peft_config)
+            else:
+                for name, param in self.backbone_model.named_parameters():
+                    param.requires_grad = True
+       
 
     def forward(self, x):
         out = self.backbone_model.get_intermediate_layers(
@@ -64,12 +110,15 @@ class Dinov3Backbone(nn.Module):
         return out
 
 def dinov3_detection(
-    fine_tune: bool=False, 
+    fine_tune: bool=False,
+    use_lora: bool=False,
+    lora_config: dict=None,
     num_classes: int=2,
     weights: str=None,
     model_name: str=None,
     repo_dir: str=None,
     resolution: list=[640, 640],
+    input_channels: int=3,
     nms: float=0.45,
     feature_extractor: str='last', # OR 'multi'
     head: str='ssd' # Detection head type, ssd or retinanet
@@ -78,7 +127,10 @@ def dinov3_detection(
         weights=weights, 
         model_name=model_name, 
         repo_dir=repo_dir, 
-        fine_tune=fine_tune
+        fine_tune=fine_tune,
+        input_channels=input_channels,
+        use_lora=use_lora,
+        lora_config=lora_config
     )
 
     if head == 'ssd':

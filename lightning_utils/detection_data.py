@@ -98,13 +98,14 @@ class DebugObjectDetectionRandomWindowGeoDataset(ObjectDetectionRandomWindowGeoD
             return None
 
 class ObjectDetectionDataFactory():
-    def __init__(self,image_dir,labels,patch_dim,upsample_factor,class_config,augmentation_transform):
+    def __init__(self,image_dir,labels,patch_dim,upsample_factor,class_config,augmentation_transform,channel_order=[4,2,1]):
         self.image_dir = image_dir
         self.labels =labels
         self.patch_dim = patch_dim
         self.upsample_factor = upsample_factor
         self.class_config = class_config
         self.augmentation_transform = augmentation_transform
+        self.channel_order = channel_order
 
     def get_dataset_list(self,aoi_dir, dtype='training',test_code=False):
         dataset_list = []
@@ -115,6 +116,8 @@ class ObjectDetectionDataFactory():
 
             if dtype == 'training':
                 ds = self.get_random_window_geodataset(full_aoi_path)
+            elif dtype == 'validation':
+                ds = self.get_sliding_window_geodataset(full_aoi_path,stride_factor=1)
             else:
                 ds = self.get_sliding_window_geodataset(full_aoi_path)
             if ds is not None:          
@@ -156,26 +159,19 @@ class ObjectDetectionDataFactory():
         aoi_height = bounds['maxy'].values[0] - bounds['miny'].values[0]
         size_in_meters = size*pixel_size
 
-        # print(f"Dimensions = ({aoi_width:.0f}m x {aoi_height:.0f}m, chip={size_in_meters:.0f}m)")
-
         if aoi_width < size_in_meters or aoi_height < size_in_meters:
             raise ValueError(
                 f"{image_id} AOI too narrow to fit a chip "
                 f"({aoi_width:.0f}m x {aoi_height:.0f}m, chip={size_in_meters:.0f}m)"
             )
 
-
-
-        
-        # print(f"{image_id} will have ~{num_chips} chips")
-
         aoi_has_labels=aoi['label_count'][0]!=0
+        if not aoi_has_labels: max_windows=min(num_chips,30)
         return full_image_path, full_aoi_path, full_label_path,image_id,size,aoi_has_labels,max_windows
 
 
 
     def get_random_window_geodataset(self,full_aoi_path):
-        
         try:
             full_image_path, full_aoi_path, full_label_path,image_id,size,aoi_has_labels,max_windows = self.get_aoi_properties(full_aoi_path=full_aoi_path)
         except Exception as e:
@@ -195,7 +191,7 @@ class ObjectDetectionDataFactory():
                     aoi_uri=full_aoi_path,
                     label_vector_uri = full_label_path,
                     class_config=self.class_config,
-                    image_raster_source_kw=dict(allow_streaming=True,channel_order=[4,2,1]),
+                    image_raster_source_kw=dict(allow_streaming=True,channel_order=self.channel_order),
                     max_windows=max_windows,
                     size_lims = [size,size+1],
                     out_size=self.patch_dim,
@@ -210,7 +206,7 @@ class ObjectDetectionDataFactory():
         except Exception as e: 
             print(f"Couldn't create dataset because:\n{e}")       
 
-    def get_sliding_window_geodataset(self,full_aoi_path): 
+    def get_sliding_window_geodataset(self,full_aoi_path,stride_factor=0.5): 
         try:
             full_image_path, full_aoi_path, full_label_path,image_id,size,aoi_has_labels,max_windows = self.get_aoi_properties(full_aoi_path=full_aoi_path)
         except Exception as e:
@@ -224,10 +220,10 @@ class ObjectDetectionDataFactory():
                     label_vector_uri = full_label_path,
                     class_config = self.class_config,
                     size = size,
-                    stride = int(size*0.5),
+                    stride = int(size*stride_factor),
                     out_size = self.patch_dim,
                     within_aoi=True,
-                    image_raster_source_kw=dict(allow_streaming=True,channel_order=[4,2,1]),return_window=False
+                    image_raster_source_kw=dict(allow_streaming=True,channel_order=self.channel_order),return_window=False
 
               )
               ds.scene.id = image_id
