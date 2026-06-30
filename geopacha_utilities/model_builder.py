@@ -1,4 +1,6 @@
 import torch
+import torch.nn as nn
+
 from torchvision.ops import sigmoid_focal_loss
 from torch.optim import AdamW
 import lightning as L
@@ -7,6 +9,20 @@ import lightning as L
 from src.detection.model import dinov3_detection
 from rastervision.pytorch_learner.object_detection_utils import compute_coco_eval
 
+from torchvision.models.detection.image_list import ImageList
+
+class PassThroughTransform(nn.Module):
+    def forward(self, images, targets=None):
+        # images is already a tensor [B, 8, 896, 896]
+        # We just need to wrap it in the ImageList object RetinaNet expects
+        image_sizes = [img.shape[-2:] for img in images]
+        return ImageList(images, image_sizes), targets
+    
+    def postprocess(self, result, image_shapes, original_image_sizes):
+        # Simply return the results without resizing boxes, masks, or keypoints.
+        return result
+
+
 
 def _sum(x):
     res = x[0]
@@ -14,18 +30,133 @@ def _sum(x):
         res = res + i
     return res
 
-def get_calibrated_dinov3_model(num_classes,weights_path,model_name,repo_path, smoothing, gamma):
-    # This is where you'd initialize your DINOv3 + RetinaNet model
-    model = dinov3_detection(
-        fine_tune=True,
-        num_classes=num_classes, 
-        weights=weights_path,
-        model_name=model_name,
-        repo_dir=repo_path,
-        feature_extractor="multi",
-        head="retinanet"
-    ) 
+def load_checkpoint_weights(model, weights_path,backbone_has_lora=False,lora_config=None,target_module="backbone.backbone_model",keep_lora_weights=False,strict=False,device="cpu"):
+    """
+    Load checkpoint weights with support for DDP and LoRA prefixes.
     
+    Args:
+        model: The model or submodule to load weights into
+        checkpoint_path: Path to the checkpoint file
+        target_module: Which part of the model to load into (e.g., 'backbone_model'). 
+                      If None, loads into the full model.
+        skip_lora_adapters: If True, skips lora_A and lora_B weights
+        strict: If False, allows missing/unexpected keys
+        device: Device to load checkpoint on
+        
+    Returns:
+    """
+    print("Load weights")
+    checkpoint = torch.load(weights_path,map_location="cpu")
+    # 1. Load the checkpoint
+    state_dict = checkpoint.get("state_dict", checkpoint)
+
+    # 2. Define the mess we want to clean up
+    DDP_PEFT_prefix = "base_model.model.module."
+    PEFT_prefix = "base_model.model."
+
+    cleaned_state_dict = {}
+
+    for key, value in state_dict.items():
+        new_key = key
+        if  backbone_has_lora:
+            new_key = new_key.replace("base_model.model.module.", "base_model.model.")
+
+            if ".base_layer" not in new_key and "lora_" not in new_key:
+                for target_mod in model.backbone.lora_config.get("target_modules"):
+                    if f".{target_mod}." in new_key:
+                        new_key = new_key.replace(f".{target_mod}.", f".{target_mod}.base_layer.")
+                        break
+            
+            # Skip LoRA weights if not keeping them
+            if not keep_lora_weights and "lora_" in new_key:
+                continue
+            
+                
+        else:
+            # Remove the DDP/PEFT prefix
+            new_key = new_key.replace(DDP_PEFT_prefix, "")
+            new_key = new_key.replace(PEFT_prefix, "")
+            new_key = new_key.replace(".base_layer", "")
+            
+            # Skip the actual LoRA weights (lora_A, lora_B) 
+            # unless you have LoRA layers initialized in your current model
+            if "lora_" in new_key:
+                continue
+
+
+        cleaned_state_dict[new_key] = value
+    
+    target = model
+    for attr in target_module.split("."):
+        target = getattr(target, attr)
+    
+    msg = target.load_state_dict(cleaned_state_dict, strict=strict)
+    print(f"Checkpoint loaded from: {weights_path}")
+    print(f"  Backbone has PEFT: {backbone_has_lora}")
+    print(f"  Keep LoRA adapters: {keep_lora_weights}")
+    print(f"  Missing keys: {len(msg.missing_keys)}")
+    print(f"  Unexpected keys: {len(msg.unexpected_keys)}")
+
+    return msg
+
+def get_calibrated_dino_model(
+    num_classes,
+    weights_path,
+    model_name,
+    repo_path,
+    input_channels=8,
+    fine_tune=False,
+    use_lora=False,
+    lora_config=None,
+    resolution=[1024,1024], 
+    smoothing=None, 
+    gamma=None,
+    clean_weights=False):
+    if 'dinov2' in repo_path:
+        clean_weights_path=None
+        if clean_weights:
+            print("using weights directly")
+            clean_weights_path=weights_path
+            weights_path=None
+        print("Loading and adjusting model")
+        model = dinov3_detection(
+            fine_tune=fine_tune,
+            use_lora=use_lora,
+            weights=clean_weights_path,
+            lora_config=lora_config,
+            num_classes=num_classes,
+            model_name=model_name,
+            input_channels=input_channels,
+            repo_dir=repo_path,
+            resolution=resolution,
+            head="retinanet"
+        )
+        
+        if weights_path is not None:
+            msg = load_checkpoint_weights(
+                model,
+                weights_path,
+                backbone_has_lora=use_lora,
+                lora_config=lora_config,
+                keep_lora_weights=False)
+
+            print(f"Load Results:\nMissing: {msg.missing_keys}\nUnexpected: {msg.unexpected_keys}")
+    else:
+        model = dinov3_detection(
+            fine_tune=fine_tune,
+            use_lora=use_lora,
+            lora_config=lora_config,
+            num_classes=num_classes, 
+            weights=weights_path,
+            model_name=model_name,
+            repo_dir=repo_path,
+            resolution=resolution,
+            feature_extractor="multi",
+            head="retinanet"
+        ) 
+    
+    model.transform = PassThroughTransform()
+
     # Wrap the existing classification head with our calibrated version
     original_head = model.head.classification_head
     model.head.classification_head = CalibratedRetinaNetHead(
@@ -37,7 +168,7 @@ def get_calibrated_dinov3_model(num_classes,weights_path,model_name,repo_path, s
 
 
 class CalibratedRetinaNetHead(torch.nn.Module):
-    def __init__(self, original_head, smoothing, gamma):
+    def __init__(self, original_head, smoothing=0, gamma=0):
         super().__init__()
         self.original_head = original_head
         self.smoothing = smoothing
@@ -108,6 +239,9 @@ class ArchDetectionModule(L.LightningModule):
             return [_x.to(device) if _x is not None else _x for _x in x]
         return x.to(device)
     
+    def on_train_epoch_start(self):
+        self.log("learning_rate",self.lr)
+        return super().on_train_epoch_start()
 
     def training_step(self, batch, batch_idx):
         images, targets = batch
@@ -148,6 +282,7 @@ class ArchDetectionModule(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         images, targets = batch
+
         outputs = self.model(images)
         
         # Use the new helper to move everything to CPU for evaluation
@@ -182,5 +317,11 @@ class ArchDetectionModule(L.LightningModule):
 
     def configure_optimizers(self):
         optimizer = AdamW(self.parameters(), lr=self.lr)
-        return optimizer
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, 'max', patience=5, factor=0.5
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {"scheduler": scheduler, "monitor": "mAP50"},
+        }
     
