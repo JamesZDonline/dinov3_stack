@@ -112,36 +112,76 @@ def get_calibrated_dino_model(
     smoothing=None, 
     gamma=None,
     clean_weights=False):
+    """
+    Construct and return a calibrated DINO model for object detection.
+
+    This function initializes a DINO-based detection model (either DINOv2 or DINOv3)
+    with optional fine-tuning and LoRA support. It also applies calibration to the classification head
+    using label smoothing and focal loss gamma parameters.
+
+    Args:
+        num_classes (int): Number of object classes for detection.
+        weights_path (str): Path to a pre-trained checkpoint to load into the model.
+                            If None, no checkpoint is loaded.
+        model_name (str): Name of the DINO model variant to use. eg (e.g., 'dinov2_vitl14', 'dinov3_vitl16').
+        repo_path (str): Path to the repository containing the model definition.
+        input_channels (int, optional): Number of input channels for the model. Default is 8.
+        fine_tune (bool, optional): Whether to enable fine-tuning mode. Default is False.
+        use_lora (bool, optional): Whether to use LoRA adapters in the backbone. Default is False.
+        lora_config (dict, optional): Configuration dictionary for LoRA layers if enabled.
+        resolution (list, optional): Input image resolution as [height, width]. Default is [1024, 1024].
+        smoothing (float, optional): Label smoothing factor for calibration. Default is None.
+        gamma (float, optional): Gamma parameter for focal loss in calibration. Default is None.
+        clean_weights (bool, optional): Whether to load weights directly without preprocessing.
+                                         Default is False.
+
+    Returns:
+        model: A configured RetinaNet-based detection model with label smoothing and focal loss.
+    """
+
+    # Check if the model uses DINOv2 architecture
     if 'dinov2' in repo_path:
-        clean_weights_path=None
-        if clean_weights:
-            print("using weights directly")
-            clean_weights_path=weights_path
-            weights_path=None
-        print("Loading and adjusting model")
-        model = dino_detection(
-            fine_tune=fine_tune,
-            use_lora=use_lora,
-            weights=clean_weights_path,
-            lora_config=lora_config,
-            num_classes=num_classes,
-            model_name=model_name,
-            input_channels=input_channels,
-            repo_dir=repo_path,
-            resolution=resolution,
-            head="retinanet"
-        )
-        
-        if weights_path is not None:
-            msg = load_checkpoint_weights(
-                model,
-                weights_path,
-                backbone_has_lora=use_lora,
+        clean_weights_path = None
+
+        # If clean_weights flag is set, load weights directly from the path without preprocessing
+        if clean_weights and weights_path is not None:
+            # Initialize the DINO detection model with specified parameters. If clean_weights is None, default weights will be used.
+            model = dino_detection(
+                fine_tune=fine_tune,
+                use_lora=use_lora,
+                weights=clean_weights_path,
                 lora_config=lora_config,
-                keep_lora_weights=False)
+                num_classes=num_classes,
+                model_name=model_name,
+                input_channels=input_channels,
+                repo_dir=repo_path,
+                resolution=resolution,
+                head="retinanet"
+            )
+        else:
+            model = dino_detection(
+                fine_tune=fine_tune,
+                use_lora=use_lora,
+                weights=None,  # Load weights later after cleaning
+                lora_config=lora_config,
+                num_classes=num_classes,
+                model_name=model_name,
+                input_channels=input_channels,
+                repo_dir=repo_path,
+                resolution=resolution,
+                head="retinanet"
+            )
+            if weights_path is not None:
+                msg = load_checkpoint_weights(
+                    model,
+                    weights_path,
+                    backbone_has_lora=use_lora,
+                    lora_config=lora_config,
+                    keep_lora_weights=False)
 
             print(f"Load Results:\nMissing: {msg.missing_keys}\nUnexpected: {msg.unexpected_keys}")
     else:
+        # For DINOv3 models, initialize with standard parameters
         model = dino_detection(
             fine_tune=fine_tune,
             use_lora=use_lora,
@@ -155,19 +195,33 @@ def get_calibrated_dino_model(
             head="retinanet"
         ) 
     
+    # Replace the default transform with a pass-through transform to avoid unnecessary preprocessing
     model.transform = PassThroughTransform()
 
-    # Wrap the existing classification head with our calibrated version
+    # Wrap the original classification head with a calibrated version that supports smoothing and gamma
     original_head = model.head.classification_head
     model.head.classification_head = CalibratedRetinaNetHead(
         original_head, 
         smoothing=smoothing, 
         gamma=gamma
     )
+
     return model
 
 
 class CalibratedRetinaNetHead(torch.nn.Module):
+    """
+    A calibrated RetinaNet head that extends the original head with label smoothing
+    and focal loss adjustments for improved classification performance.
+
+    This module wraps an existing RetinaNet head and modifies its classification
+    loss computation to include label smoothing and focal loss with adjustable gamma.
+
+    Args:
+        original_head: The original RetinaNet head to be wrapped
+        smoothing (float): Label smoothing factor (0.0 = no smoothing, 0.1 = 10% smoothing)
+        gamma (float): Focal loss focusing parameter (0.0 = no focus, higher values = more focus on hard examples)
+    """
     def __init__(self, original_head, smoothing=0, gamma=0):
         super().__init__()
         self.original_head = original_head
@@ -180,36 +234,66 @@ class CalibratedRetinaNetHead(torch.nn.Module):
         self.BETWEEN_THRESHOLDS = -2
 
     def forward(self, x):
+        """
+        Forward pass through the original head.
+
+        Args:
+            x: Input features from the backbone
+
+        Returns:
+            Output from the original head
+        """
         return self.original_head(x)
 
     
     def compute_loss(self, targets, head_outputs, matched_idxs):
+        """
+        Compute the classification loss with label smoothing and focal loss.
+
+        This method computes the loss for classification targets using sigmoid
+        focal loss with optional label smoothing to improve generalization.
+
+        Args:
+            targets: List of target dictionaries containing labels and other information
+            head_outputs: Dictionary containing classification logits from the head
+            matched_idxs: Tensor of matched indices for each anchor
+
+        Returns:
+            Total classification loss averaged over all images in the batch
+        """
         losses = []
 
+        # Extract classification logits from head outputs
         cls_logits = head_outputs["cls_logits"]
 
+        # Process each image in the batch
         for targets_per_image, cls_logits_per_image, matched_idxs_per_image in zip(targets, cls_logits, matched_idxs):
-            # determine only the foreground
+            # Identify foreground anchors (those that match with ground truth objects)
             foreground_idxs_per_image = matched_idxs_per_image >= 0
             num_foreground = foreground_idxs_per_image.sum()
 
-            # create the target classification
+            # Create target classification tensor initialized to zeros
             gt_classes_target = torch.zeros_like(cls_logits_per_image)
+
+            # Set the appropriate class labels for foreground anchors
             gt_classes_target[
                 foreground_idxs_per_image,
                 targets_per_image["labels"][matched_idxs_per_image[foreground_idxs_per_image]],
             ] = 1.0
 
-            # --- Apply Label Smoothing ---
+            # Apply label smoothing to prevent overconfidence
             # Formula: target = target * (1 - smoothing) + 0.5 * smoothing
             # This pushes 0.0 to epsilon and 1.0 to 1-epsilon
             if hasattr(self, 'smoothing') and self.smoothing > 0:
                 gt_classes_target = gt_classes_target * (1 - self.smoothing) + 0.5 * self.smoothing
 
-            # find indices for which anchors should be ignored
+            # Identify valid anchors that should not be ignored
+            # Anchors with BETWEEN_THRESHOLDS (-2) are ignored in loss computation
             valid_idxs_per_image = matched_idxs_per_image != self.BETWEEN_THRESHOLDS
 
-            # compute the classification loss
+            # Compute sigmoid focal loss for foreground anchors
+            # The loss is normalized by the number of foreground anchors to prevent
+            # the loss from being dominated by background anchors
             losses.append(
                 sigmoid_focal_loss(
                     cls_logits_per_image[valid_idxs_per_image],
@@ -220,6 +304,7 @@ class CalibratedRetinaNetHead(torch.nn.Module):
                 / max(1, num_foreground)
             )
 
+        # Return average loss across all images in the batch
         return _sum(losses) / len(targets)
     
 

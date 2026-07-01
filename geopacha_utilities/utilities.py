@@ -154,13 +154,31 @@ def compute_coco_eval(outputs, targets, num_class_ids):
 
 
 def get_detection_predictions(dataloader, model, device='cuda'):
+    """
+    Generate object detection predictions from a model using the provided dataloader.
+    
+    This function processes batches of images through the model and yields prediction
+    dictionaries containing boxes, class IDs, and scores for each detected object.
+    
+    Args:
+        dataloader: PyTorch DataLoader providing image batches
+        model: Trained object detection model
+        device (str): Device to run inference on ('cuda' or 'cpu')
+        
+    Yields:
+        dict: Prediction dictionary with keys 'boxes', 'class_ids', and 'scores'
+    """
+    # Set model to evaluation mode and move to specified device
     model.eval()
     model.to(device)
+    
+    # Get dataset properties for scaling boxes
     ds = dataloader.dataset
     native_window_size = ds.size[0]
     model_input_size = ds.out_size[0]
-
-    scale_factor = native_window_size/model_input_size
+    scale_factor = native_window_size / model_input_size
+    
+    # Process each batch in the dataloader
     for x, _ in tqdm(dataloader):
         with torch.inference_mode():
             # Move images to GPU
@@ -169,7 +187,7 @@ def get_detection_predictions(dataloader, model, device='cuda'):
             
             # The Adapter returns a list of BoxList objects
             out_batch = model(x)
-        # Move labels to cpu and yeild them
+        # Move labels to cpu and yield them
         for out in out_batch:
                 boxes = out.convert_boxes('yxyx').cpu().numpy()
                 scaled_boxes = boxes*scale_factor
@@ -183,12 +201,35 @@ def get_detection_predictions(dataloader, model, device='cuda'):
                 }
 
 
-def get_segmentation_predictions(dataloader,model, size, device='cuda'):
+def get_segmentation_predictions(dataloader, model, size, device='cuda'):
+    """
+    Generate segmentation predictions from a model using the provided dataloader.
+    
+    This function processes batches of images through the model and yields 
+    segmentation masks for each image in the batch.
+    
+    Args:
+        dataloader: PyTorch DataLoader providing image batches
+        model: Trained segmentation model
+        size (int): Target output size for segmentation masks
+        device (str): Device to run inference on ('cuda' or 'cpu')
+        
+    Yields:
+        numpy.ndarray: Segmentation mask with shape [H, W] 
+    """
+    # Process each batch in the dataloader
     for x, _ in tqdm(dataloader):
+        # Move input to specified device
         x = x.to(device)
+        
         with torch.inference_mode():
+            # Run model inference
             out_batch = model(x)
+            
+            # Apply softmax to get class probabilities
             out_batch = out_batch.softmax(dim=1)  # [B, num_classes, H, W]
+            
+            # Resize output to target size if needed
             if out_batch.shape[-1] != size or out_batch.shape[-2] != size:
                 out_batch = torch.nn.functional.interpolate(
                     out_batch,
@@ -196,6 +237,10 @@ def get_segmentation_predictions(dataloader,model, size, device='cuda'):
                     mode='bilinear',
                     align_corners=False
                 )
+            
+            # Convert probabilities to class predictions (argmax)
             out_batch = out_batch.argmax(dim=1)  # [B, H, W] after interpolation
+        
+        # Yield each prediction mask in the batch
         for out in out_batch:
             yield out.cpu().numpy()
